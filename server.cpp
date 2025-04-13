@@ -42,4 +42,8 @@ int main()
         WSACleanup();
         return 1;
     }
+
+    closesocket(serverSocket);
+    WSACleanup();
+    return 0;
 }
