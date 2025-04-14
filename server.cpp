@@ -1,5 +1,7 @@
 #include <iostream>
 #include <winsock2.h>
+#include <thread>
+#include "client_handler.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -41,6 +43,20 @@ int main()
         closesocket(serverSocket);
         WSACleanup();
         return 1;
+    }
+
+    std::cout << "Server started on port " << PORT << "." << std::endl;
+
+    while(true)
+    {
+        SOCKET clientSocket = accept(serverSocket, NULL, NULL);
+        if (clientSocket == INVALID_SOCKET)
+        {
+            std::cerr << "Error accepting client connection.\n";
+        }
+
+        std::thread clientThread((ClientHandler(clientSocket)));
+        clientThread.join();
     }
 
     closesocket(serverSocket);

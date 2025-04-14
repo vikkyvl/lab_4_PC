@@ -4,6 +4,7 @@
 #include <vector>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include "commands.h"
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -12,13 +13,6 @@
 
 #define MIN 1
 #define MAX 100
-
-enum ClientRequest
-{
-    CONFIG = 1,
-    CALCULATE,
-    GET_RESULT
-};
 
 struct MatrixData
 {
@@ -63,9 +57,44 @@ private:
     }
 };
 
-void sendData()
+void sendCommand(SOCKET socket, const ClientRequest command)
 {
+    int networkCommand = htonl(command);
+    send(socket, (char*)&networkCommand, sizeof(networkCommand), 0);
+}
 
+void sendData(SOCKET socket, const MatrixData& data)
+{
+    int size, value, thread_N;
+    size = htonl(data.matrixSize);
+    send(socket, (char*)&size, sizeof(size), 0);
+
+    for (int i = 0; i < data.matrixSize; i++)
+    {
+        for (int j = 0; j < data.matrixSize; j++)
+        {
+            value = htonl(data.matrix[i][j]);
+            send(socket, (char*)&value, sizeof(value), 0);
+        }
+    }
+
+    thread_N = htonl(data.threadsCount);
+    send(socket, (char*)&thread_N, sizeof(thread_N), 0);
+}
+
+int receiveRespond(SOCKET socket)
+{
+    int networkResponse;
+    int bytesReceived = recv(socket, (char*)&networkResponse, sizeof(networkResponse), 0);
+
+    if (bytesReceived <= 0)
+    {
+        std::cerr << "Failed to receive response from server.\n";
+        return -1;
+    }
+
+    int response = ntohl(networkResponse);
+    return response;
 }
 
 void receiveData()
@@ -118,7 +147,17 @@ int main()
     std::cin >> threadsCount;
 
     MatrixData data(matrixSize, threadsCount);
-    data.printMatrix();
+    // data.printMatrix();
+
+    sendCommand(clientSocket, CONFIG);
+    int message = receiveRespond(clientSocket);
+    if(message != CONFIG_OK)
+    {
+        std::cerr << "Config error: " << message << std::endl;
+        closesocket(clientSocket);
+        WSACleanup();
+        return 1;
+    }
 
     closesocket(clientSocket);
     WSACleanup();
