@@ -5,7 +5,7 @@ MatrixCalculation::MatrixCalculation(std::vector<std::vector<int> > &matrix, int
 void MatrixCalculation::startCalculation()
 {
     worker = std::thread(&MatrixCalculation::columnsDistribution, this);
-    worker.join();
+    worker.detach();
 }
 
 void MatrixCalculation::columnsDistribution()
@@ -20,13 +20,13 @@ void MatrixCalculation::columnsDistribution()
 void MatrixCalculation::calculatingProductOfColumn(const int col)
 {
     int product = 1;
-
-    for(int row = 0; row < matrix.size(); row++)
+    const int N = matrix.size();
+    for(int row = 0; row < N; row++)
     {
         product *= matrix[row][col];
     }
 
-    matrix[thread_N - 1 - col][col] = product;
+    matrix[N - 1 - col][col] = product;
 
     progress++;
 }

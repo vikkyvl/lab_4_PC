@@ -10,25 +10,33 @@ class ClientHandler
 {
 private:
     SOCKET clientSocket;
+    std::string clientIp;
+    int clientPort;
+
+    std::vector<int> matrixArray;
     std::vector<std::vector<int>> matrix;
-    ServerState serverState;
-    int thread_N;
-    bool isSession;
     std::vector<MatrixCalculation> threadsMatrixCalculation;
 
+    int N;
+    int thread_N;
+    bool isSession;
+    ServerState serverState;
+
 public:
-    explicit ClientHandler(SOCKET clientSocket);
+    explicit ClientHandler(SOCKET socket, std::string clientIp, int clientPort);
     void operator()();
 
     void handleConfig();
     void handleCalculate();
     void handleGetResult();
 
-    void receiveData();
+    bool receiveTLV(uint8_t& type, std::vector<char>& buffer) const;
     int receiveCommand();
+    void receiveData();
 
-    void sendCalculatedMatrix();
+    void sendTLV(uint8_t type, const void* data, uint32_t length) const;
     void sendRespond(ServerRespond response);
+    void sendCalculatedMatrix();
 
     void startCalculation();
     int getCalculationProgress();

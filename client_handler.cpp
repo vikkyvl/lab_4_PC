@@ -1,7 +1,10 @@
 #include "client_handler.h"
+#include <math.h>
 #include <iostream>
 
-ClientHandler::ClientHandler(SOCKET socket): clientSocket(socket), serverState(ServerState::INITIAL), isSession(true) {}
+ClientHandler::ClientHandler(SOCKET socket, std::string ip, int port): clientSocket(socket), clientIp(std::move(ip)), clientPort(port), serverState(ServerState::INITIAL), isSession(true) {}
+
+extern std::atomic<int> activeClients;
 
 void ClientHandler::operator()()
 {
@@ -9,7 +12,11 @@ void ClientHandler::operator()()
     {
         int command = receiveCommand();
 
-        if (command == CONFIG)
+        if (command == IS_BUSY)
+        {
+            sendRespond(ACTIVE);
+        }
+        else if (command == CONFIG)
         {
             handleConfig();
         }
@@ -27,8 +34,10 @@ void ClientHandler::operator()()
             sendRespond(FAILED);
         }
     }
-    std::cout << "Client disconnected" << std::endl;
+    std::cout << "Client disconnected: " << clientIp << "|" << clientPort << std::endl;
     closesocket(clientSocket);
+
+    activeClients.fetch_sub(1);
 }
 
 void ClientHandler::handleConfig()
@@ -71,6 +80,7 @@ void ClientHandler::handleGetResult()
             sendRespond(CURRENT_PROGRESS);
             int currentProgress = htonl(progress);
             send(clientSocket, (char*)&currentProgress, sizeof(currentProgress), 0);
+            std::cout << "Progress sent to " << clientIp << ":" << clientPort << " - " << progress << "%" << std::endl;
         }
         else
         {
@@ -85,51 +95,86 @@ void ClientHandler::handleGetResult()
     }
 }
 
+bool ClientHandler::receiveTLV(uint8_t& type, std::vector<char>& buffer) const
+{
+    uint32_t networkLength, length;
+
+    if(recv(clientSocket, (char*)&type, sizeof(type), 0) == SOCKET_ERROR)
+    {
+        return false;
+    }
+
+    if(recv(clientSocket, (char*)&networkLength, sizeof(networkLength), 0) == SOCKET_ERROR)
+    {
+        return false;
+    }
+
+    length = ntohl(networkLength);
+    buffer.resize(length);
+
+    int received = 0;
+    while(received < length)
+    {
+        int bytes = recv(clientSocket, buffer.data() + received, length - received, 0);
+        if(bytes == SOCKET_ERROR)
+        {
+            return false;
+        }
+        received += bytes;
+    }
+
+    return true;
+}
+
 int ClientHandler::receiveCommand()
 {
-    int networkCommand;
-    int bytesReceived = recv(clientSocket, (char*)&networkCommand, sizeof(networkCommand), 0);
-    if (bytesReceived == SOCKET_ERROR)
+    uint8_t type;
+    std::vector<char> buffer;
+
+    if (!receiveTLV(type, buffer))
     {
-        std::cerr << "Error receiving command or client disconnected.\n";
+        std::cerr << "Failed to receive valid command.\n";
         isSession = false;
         return -1;
     }
 
-    return ntohl(networkCommand);
+    int netCommand;
+    memcpy(&netCommand, buffer.data(), sizeof(int));
+    return ntohl(netCommand);
 }
 
 void ClientHandler::receiveData()
 {
-    int sizeReceived;
-    int bytes = recv(clientSocket, (char*)&sizeReceived, sizeof(sizeReceived), 0);
-    if (bytes == SOCKET_ERROR)
+    uint8_t type;
+    std::vector<char> buffer;
+    std::vector<int> matrixArray;
+
+    for(int i = 0; i < 2; i++)
     {
-        std::cerr << "Failed to receive matrix size." << std::endl;
-        isSession = false;
-        return;
-    }
-    int N = ntohl(sizeReceived);
-
-    matrix.resize(N, std::vector<int>(N));
-
-    int totalElements = N * N;
-    std::vector<int> matrixArray(totalElements);
-
-    int totalBytes = totalElements * sizeof(int);
-    int receivedBytes = 0;
-
-    while (receivedBytes < totalBytes)
-    {
-        int bytes = recv(clientSocket, (char*)matrixArray.data() + receivedBytes, totalBytes - receivedBytes, 0);
-        if (bytes <= 0)
+        if (!receiveTLV(type, buffer))
         {
-            std::cerr << "Error receiving matrix data.\n";
+            std::cerr << "Failed to receive TLV segment.\n";
+            isSession = false;
             return;
         }
-        receivedBytes += bytes;
+
+        if(type == MATRIX)
+        {
+            int totalElements = buffer.size() / sizeof(int);
+            N = static_cast<int>(sqrt(totalElements));
+
+            matrixArray.resize(totalElements);
+            memcpy(matrixArray.data(), buffer.data(), buffer.size());
+        }
+        else if(type == THREADS)
+        {
+            int threadsReceived;
+            memcpy(&threadsReceived, buffer.data(), sizeof(int));
+            thread_N = ntohl(threadsReceived);
+        }
     }
 
+    matrix.resize(N, std::vector<int>(N));
     int ij = 0;
     for (int i = 0; i < N; ++i)
     {
@@ -139,34 +184,28 @@ void ClientHandler::receiveData()
         }
     }
 
-    int threadsReceived;
-    if (recv(clientSocket, (char*)&threadsReceived, sizeof(threadsReceived), 0) <= 0)
-    {
-        std::cerr << "Error receiving threads count.\n";
-        isSession = false;
-        return;
-    }
-    thread_N = ntohl(threadsReceived);
+    std::cout << "Received matrix size: " << N << " and threads: " << thread_N << " from " << clientIp << " | " << clientPort << std::endl;
+}
 
-    std::cout << "Received matrix size: " << N << " and threads: " << thread_N << "\n";
+void ClientHandler::sendTLV(uint8_t type, const void* data, uint32_t length) const
+{
+    send(clientSocket, (char*)&type, sizeof(type), 0);
+
+    uint32_t netLength = htonl(length);
+    send(clientSocket, (char*)&netLength, sizeof(netLength), 0);
+
+    send(clientSocket, (char*)data, length, 0);
 }
 
 void ClientHandler::sendRespond(ServerRespond response)
 {
     int message = htonl(response);
-    send(clientSocket, (char*)&message, sizeof(message), 0);
+    sendTLV(COMMAND, &message, sizeof(message));
 }
 
 void ClientHandler::sendCalculatedMatrix()
 {
-    int matrixSize = matrix.size();
-    int networkSize = htonl(matrixSize);
-
-    send(clientSocket, (char*)&networkSize, sizeof(networkSize), 0);
-
-    int totalElements = matrixSize * matrixSize;
-    std::vector<int> matrixArray;
-    matrixArray.reserve(totalElements);
+    int totalElements = N * N;
 
     for (const auto& row : matrix)
     {
@@ -176,21 +215,9 @@ void ClientHandler::sendCalculatedMatrix()
         }
     }
 
-    int totalBytes = totalElements * sizeof(int);
-    int sentBytes = 0;
+    sendTLV(MATRIX, matrixArray.data(), totalElements * sizeof(int));
 
-    while (sentBytes < totalBytes)
-    {
-        int bytesNow = send(clientSocket, (char*)matrixArray.data() + sentBytes, totalBytes - sentBytes, 0);
-        if (bytesNow == SOCKET_ERROR)
-        {
-            std::cerr << "Error sending calculated matrix.\n";
-            return;
-        }
-        sentBytes += bytesNow;
-    }
-
-    std::cout << "Matrix sent successfully to client.\n";
+    std::cout << "Matrix sent successfully to client " << clientIp << " | " << clientPort << std::endl;;
 }
 
 void ClientHandler::startCalculation()
@@ -213,6 +240,6 @@ int ClientHandler::getCalculationProgress()
     {
         total += threadMatrixCalculation.getProgress();
     }
-    int totalColumns = matrix.size();
+    int totalColumns = N;
     return (total * 100) / totalColumns;
 }

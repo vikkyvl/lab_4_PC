@@ -1,11 +1,15 @@
 #include <iostream>
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <thread>
+#include <atomic>
 #include "client_handler.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define PORT 1234
+#define PORT 8080
+#define MAX_CLIENTS 2
+std::atomic<int> activeClients(0);
 
 int main()
 {
@@ -49,14 +53,42 @@ int main()
 
     while(true)
     {
-        SOCKET clientSocket = accept(serverSocket, NULL, NULL);
+        sockaddr_in clientAddr;
+        int clientAddrSize = sizeof(clientAddr);
+
+        SOCKET clientSocket = accept(serverSocket, (sockaddr*)&clientAddr, &clientAddrSize);
         if (clientSocket == INVALID_SOCKET)
         {
             std::cerr << "Error accepting client connection.\n";
         }
 
-        std::thread clientThread((ClientHandler(clientSocket)));
-        clientThread.join();
+        if (activeClients >= MAX_CLIENTS)
+        {
+            std::cerr << "Too many clients. Rejecting new client.\n";
+
+            int busyResponse = htonl(BUSY);
+            uint8_t type = COMMAND;
+            uint32_t length = htonl(sizeof(int));
+
+            send(clientSocket, (char*)&type, sizeof(type), 0);
+            send(clientSocket, (char*)&length, sizeof(length), 0);
+            send(clientSocket, (char*)&busyResponse, sizeof(busyResponse), 0);
+
+            closesocket(clientSocket);
+            continue;
+        }
+
+        char clientIp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(clientAddr.sin_addr), clientIp, INET_ADDRSTRLEN);
+        int clientPort = ntohs(clientAddr.sin_port);
+
+        std::cout << "Client connected from IP: " << clientIp << " | Port: " << clientPort << std::endl;
+
+        activeClients.fetch_add(1);
+        std::cout << "New client connected. Active clients: " << activeClients.load() << std::endl;
+
+        std::thread clientThread((ClientHandler(clientSocket, clientIp, clientPort)));
+        clientThread.detach();
     }
 
     closesocket(serverSocket);
