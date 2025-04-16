@@ -64,8 +64,8 @@ void sendTLV(SOCKET socket, uint8_t type, const void* data, uint32_t length)
 {
     send(socket, (char*)&type, sizeof(type), 0);
 
-    uint32_t netLength = htonl(length);
-    send(socket, (char*)&netLength, sizeof(netLength), 0);
+    uint32_t networkLength = htonl(length);
+    send(socket, (char*)&networkLength, sizeof(networkLength), 0);
 
     send(socket, (char*)data, length, 0);
 }

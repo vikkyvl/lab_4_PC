@@ -34,7 +34,7 @@ void ClientHandler::operator()()
             sendRespond(FAILED);
         }
     }
-    std::cout << "Client disconnected: " << clientIp << "|" << clientPort << std::endl;
+    std::cout << "Client disconnected: " << clientIp << " | " << clientPort << std::endl;
     closesocket(clientSocket);
 
     activeClients.fetch_sub(1);
